@@ -1,0 +1,69 @@
+{
+  "main": "agent-network.yaml",
+  "name": "deal-desk-network",
+  "classifier": "agentic-network",
+  "organizationId": "c35a98e4-c0ae-4964-93da-fe50b00aedc3",
+  "descriptorVersion": "1.0.0",
+  "apiVersion": "v1",
+  "tags": [
+    "agentscript",
+    "deal-desk"
+  ],
+  "metadata": {
+    "toolingVersion": 1,
+    "variables": {
+      "pricingAgent": {
+        "url": {
+          "description": "Pricing Agent A2A endpoint (Render)",
+          "default": "https://deal-desk-agents.onrender.com/pricing",
+          "secret": false
+        }
+      },
+      "creditAgent": {
+        "url": {
+          "description": "Credit Agent A2A endpoint (Render)",
+          "default": "https://deal-desk-agents.onrender.com/credit",
+          "secret": false
+        }
+      },
+      "contractAgent": {
+        "url": {
+          "description": "Contract Agent A2A endpoint (Render)",
+          "default": "https://deal-desk-agents.onrender.com/contract",
+          "secret": false
+        }
+      },
+      "gemini": {
+        "url": {
+          "description": "Google Gemini API base URL (direct). The Model Proxy route (deal-desk-gemini) never activated on the trial gateway.",
+          "default": "https://generativelanguage.googleapis.com",
+          "secret": false
+        },
+        "apiKey": {
+          "description": "Google AI Studio API key. Enter it at deploy time; never commit it.",
+          "default": "",
+          "secret": true
+        }
+      }
+    }
+  },
+  "dependencies": [
+    {
+      "groupId": "68ef9520-24e9-4cf2-b2f5-620025690913",
+      "assetId": "dataweave-body-transformation",
+      "version": "1.0.0",
+      "classifier": "schema",
+      "packaging": "zip"
+    },
+    {
+      "groupId": "68ef9520-24e9-4cf2-b2f5-620025690913",
+      "assetId": "dataweave-body-transformation-outbound",
+      "version": "1.0.0",
+      "classifier": "schema",
+      "packaging": "zip"
+    }
+  ],
+  "groupId": "c35a98e4-c0ae-4964-93da-fe50b00aedc3",
+  "assetId": "deal-desk-network",
+  "version": "0.0.0"
+}

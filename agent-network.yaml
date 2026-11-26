@@ -1,0 +1,205 @@
+agentNetwork: 2.0.0
+info:
+    label: Deal Desk Agent Network
+    description: Sales Deal Desk - the broker checks a discount request with the
+        Pricing, Credit and Contract agents and returns one decision.
+    version: v1
+registry:
+    agents:
+        pricingAgent:
+            info:
+                label: Pricing Agent
+            metadata:
+                platform: Other
+                interfaces:
+                    a2a_v03:
+                        card:
+                            name: Pricing Agent
+                            description: Checks a requested discount against margin rules in the ERP and
+                                says if it is approved, needs VP approval, or is
+                                not allowed.
+                            url: https://deal-desk-agents.onrender.com/pricing
+                            protocolVersion: 0.3.0
+                            version: 1.0.0
+                            capabilities:
+                                pushNotifications: false
+                            defaultInputModes:
+                                - text/plain
+                            defaultOutputModes:
+                                - text/plain
+                            skills:
+                                - id: discount_check
+                                  name: Discount check
+                                  description: Is X% discount allowed on deal Y? Returns decision, discount value
+                                      and margin impact.
+                                  tags:
+                                      - pricing
+                                      - discount
+                                      - margin
+                                      - deal desk
+                                  examples:
+                                      - Can ACME-Q4 get 20% discount?
+                                  inputModes:
+                                      - text/plain
+                                  outputModes:
+                                      - text/plain
+        creditAgent:
+            info:
+                label: Credit Agent
+            metadata:
+                platform: Other
+                interfaces:
+                    a2a_v03:
+                        card:
+                            name: Credit Agent
+                            description: Checks a customer's payment history, credit risk and credit limit
+                                from the credit bureau / AR system and
+                                recommends payment terms.
+                            url: https://deal-desk-agents.onrender.com/credit
+                            protocolVersion: 0.3.0
+                            version: 1.0.0
+                            capabilities:
+                                pushNotifications: false
+                            defaultInputModes:
+                                - text/plain
+                            defaultOutputModes:
+                                - text/plain
+                            skills:
+                                - id: credit_check
+                                  name: Customer credit check
+                                  description: Is customer X (or the customer on deal Y) creditworthy? Returns
+                                      risk score, payment history, limit check
+                                      and recommendation.
+                                  tags:
+                                      - credit
+                                      - risk
+                                      - payment history
+                                      - deal desk
+                                  examples:
+                                      - Credit check for GLOBEX-Q4
+                                  inputModes:
+                                      - text/plain
+                                  outputModes:
+                                      - text/plain
+        contractAgent:
+            info:
+                label: Contract Agent
+            metadata:
+                platform: Other
+                interfaces:
+                    a2a_v03:
+                        card:
+                            name: Contract Agent
+                            description: Drafts contract terms for a deal from the Legal / CLM system,
+                                choosing standard, extended (3-year) or secured
+                                (advance payment) templates.
+                            url: https://deal-desk-agents.onrender.com/contract
+                            protocolVersion: 0.3.0
+                            version: 1.0.0
+                            capabilities:
+                                pushNotifications: false
+                            defaultInputModes:
+                                - text/plain
+                            defaultOutputModes:
+                                - text/plain
+                            skills:
+                                - id: contract_draft
+                                  name: Draft contract terms
+                                  description: Draft a contract for deal Y with X% discount. Returns draft ID,
+                                      template, final price, terms and reason.
+                                  tags:
+                                      - contract
+                                      - legal
+                                      - terms
+                                      - deal desk
+                                  examples:
+                                      - Draft contract for ACME-Q4 with 20%
+                                        discount
+                                  inputModes:
+                                      - text/plain
+                                  outputModes:
+                                      - text/plain
+    llms:
+        geminiFlash:
+            info:
+                label: Gemini 3.5 Flash Lite
+            metadata:
+                platform: Gemini
+context:
+    policies:
+        # Governance: mask Indian PAN (AAAAA9999A -> AAAAA****A) in every Credit Agent response,
+        # at the gateway, before the broker or the LLM ever sees it.
+        pan-masking:
+            ref:
+                namespace: 68ef9520-24e9-4cf2-b2f5-620025690913
+                name: dataweave-body-transformation
+            configuration:
+                requestFlow: onResponse
+                script: |
+                    %dw 2.0
+                    output application/json
+                    fun maskPan(s: String): String = s replace /\b([A-Z]{5})[0-9]{4}([A-Z])\b/ with ((m) -> m[1] ++ "****" ++ m[2])
+                    ---
+                    read(maskPan(write(payload, "application/json")), "application/json")
+    connections:
+        pricing_agent_connection:
+            kind: a2a
+            ref:
+                name: pricingAgent
+            url: ${pricingAgent.url}
+        credit_agent_connection:
+            kind: a2a
+            ref:
+                name: creditAgent
+            url: ${creditAgent.url}
+            policies:
+                inbound:
+                    - ref:
+                          name: pan-masking
+                outbound: []
+        contract_agent_connection:
+            kind: a2a
+            ref:
+                name: contractAgent
+            url: ${contractAgent.url}
+        gemini_connection:
+            kind: llm
+            ref:
+                name: geminiFlash
+            url: ${gemini.url}
+            authentication:
+                kind: apiKey
+                apiKey: ${gemini.apiKey}
+brokers:
+    deal_desk_broker:
+        kind: AgentScript
+        implementation: ./brokers/deal-desk-broker.agent
+        interfaces:
+            a2a:
+                card:
+                    name: Deal Desk Broker
+                    description: Reviews a deal discount request. Checks pricing policy, customer
+                        credit and contract terms with three specialist agents
+                        and returns one Deal Desk decision.
+                    version: 1.0.0
+                    capabilities:
+                        streaming: true
+                        pushNotifications: false
+                    defaultInputModes:
+                        - text/plain
+                    defaultOutputModes:
+                        - text/plain
+                    skills:
+                        - id: deal_review
+                          name: Deal discount review
+                          description: Give a deal ID and a discount %, get back approved / VP approval
+                              required / not allowed, with credit terms and a
+                              contract draft.
+                          tags:
+                              - deal desk
+                              - pricing
+                              - credit
+                              - contract
+                          examples:
+                              - Review deal ACME-Q4 with 20% discount
+                              - Can GLOBEX-Q4 get 10% discount?

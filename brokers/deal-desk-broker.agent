@@ -1,0 +1,172 @@
+# @dialect: AGENTFABRIC=1.5
+
+system:
+  instructions: "You are the Sales Deal Desk broker. You review discount requests on sales deals by consulting the Pricing, Credit and Contract agents, and you return one clear Deal Desk decision. You never invent numbers; every figure comes from an agent's reply."
+
+config:
+  agent_name: "deal-desk-broker"
+  default_llm: @llm.gemini_flash
+
+llm:
+  gemini_flash:
+    target: "llm://gemini_connection"
+    kind: "Gemini"
+    model: "gemini-3.5-flash-lite"
+
+
+# -- ACTION DEFINITIONS -------------------------------------------------------
+
+actions:
+  pricing_agent:
+    target: "a2a://pricing_agent_connection"
+    kind: "a2a:send_message"
+
+  credit_agent:
+    target: "a2a://credit_agent_connection"
+    kind: "a2a:send_message"
+
+  contract_agent:
+    target: "a2a://contract_agent_connection"
+    kind: "a2a:send_message"
+
+
+# -- TRIGGER ------------------------------------------------------------------
+
+trigger dealDeskTrigger:
+  kind: "a2a"
+  target: "brokers://deal_desk_broker/a2a"
+  on_message: ->
+    transition to @orchestrator.dealReview
+
+
+# -- DEAL REVIEW (Pricing -> Credit -> Contract) -----------------------------
+
+orchestrator dealReview:
+  description: "Checks the discount with Pricing, the customer with Credit, then drafts terms with Contract."
+  label: "Deal Review"
+  system:
+    instructions: |
+      You review one discount request on one sales deal. Known deal IDs look like ACME-Q4 or GLOBEX-Q4.
+
+      Step 1: Find the deal ID and the requested discount % in the request.
+              If there is no deal ID, do not call any agent: set pricing_decision to "unknown",
+              and put "Please share the deal ID (for example ACME-Q4) and the discount %." in summary.
+      Step 2: Call check_pricing with a message like "Can <DEAL-ID> get <N>% discount?".
+              Its reply starts with APPROVED, VP APPROVAL REQUIRED or NOT ALLOWED.
+              Set pricing_decision to "approved", "vp_approval" or "not_allowed" to match.
+      Step 3: Call check_credit with a message like "Credit check for <DEAL-ID>".
+              If the reply recommends secured terms / advance payment, set credit_decision to "secured";
+              otherwise set it to "approved".
+              Copy the Credit Agent's reply word for word into credit_report. Do not edit or shorten it.
+      Step 4: Only if pricing_decision is "approved" or "vp_approval": call draft_contract with
+              "Draft contract for <DEAL-ID> with <N>% discount", and add " with SECURED terms" when
+              credit_decision is "secured". Put the draft ID (starts with CTR-) in contract_draft_id.
+              If pricing_decision is "not_allowed", skip this step and set contract_draft_id to "none".
+      Step 5: Write summary in 3 to 5 short lines for a sales rep: deal and customer, discount and margin
+              impact, credit outcome and payment terms, contract template and final price.
+              Use only figures that the agents returned.
+
+      Call each agent at most once.
+  reasoning:
+    instructions: ->
+      | {!@request.payload.message.parts[0].text}
+    actions:
+      check_pricing: @actions.pricing_agent
+      check_credit: @actions.credit_agent
+      draft_contract: @actions.contract_agent
+    max_number_of_loops: 6
+    task_timeout_secs: 120
+    outputs:
+      properties:
+        deal_id:
+          type: "string"
+          description: "The deal ID from the request, or 'none' if not given"
+        discount_pct:
+          type: "string"
+          description: "The requested discount percentage, for example '20'"
+        pricing_decision:
+          type: "string"
+          description: "Pricing Agent decision"
+          enum:
+            - "approved"
+            - "vp_approval"
+            - "not_allowed"
+            - "unknown"
+        credit_decision:
+          type: "string"
+          description: "Credit outcome"
+          enum:
+            - "approved"
+            - "secured"
+        contract_draft_id:
+          type: "string"
+          description: "Contract draft ID from the Contract Agent, or 'none'"
+        credit_report:
+          type: "string"
+          description: "The Credit Agent reply, copied word for word"
+        summary:
+          type: "string"
+          description: "Short summary for the sales rep"
+  on_exit: ->
+    transition to @router.decisionRouter
+
+
+# -- DECISION ROUTING (hard policy lives here, not in the prompt) -------------
+
+router decisionRouter:
+  description: "Routes on the Pricing Agent decision."
+  routes:
+    - target: @echo.needInfoResponse
+      when: @orchestrator.dealReview.output.pricing_decision == "unknown"
+      label: "Missing deal ID"
+    - target: @echo.notAllowedResponse
+      when: @orchestrator.dealReview.output.pricing_decision == "not_allowed"
+      label: "Not allowed"
+    - target: @echo.vpApprovalResponse
+      when: @orchestrator.dealReview.output.pricing_decision == "vp_approval"
+      label: "VP approval"
+  otherwise:
+    target: @echo.approvedResponse
+
+
+# -- RESPONSES ----------------------------------------------------------------
+
+echo approvedResponse:
+  kind: "a2a:status_update_event"
+  state: "TASK_STATE_COMPLETED"
+  message: a2a.message({
+    messageId: uuid(),
+    parts: [
+      a2a.textPart("DEAL DESK DECISION: APPROVED (" + @orchestrator.dealReview.output.deal_id + ", " + @orchestrator.dealReview.output.discount_pct + "% discount) | " + @orchestrator.dealReview.output.summary + " | Contract draft: " + @orchestrator.dealReview.output.contract_draft_id + " | Credit report: " + @orchestrator.dealReview.output.credit_report)
+    ]
+  })
+
+echo vpApprovalResponse:
+  kind: "a2a:status_update_event"
+  state: "TASK_STATE_COMPLETED"
+  message: a2a.message({
+    messageId: uuid(),
+    parts: [
+      a2a.textPart("DEAL DESK DECISION: VP APPROVAL REQUIRED (" + @orchestrator.dealReview.output.deal_id + ", " + @orchestrator.dealReview.output.discount_pct + "% discount) | " + @orchestrator.dealReview.output.summary + " | Contract draft (pending VP approval): " + @orchestrator.dealReview.output.contract_draft_id + " | Credit report: " + @orchestrator.dealReview.output.credit_report)
+    ]
+  })
+
+echo notAllowedResponse:
+  kind: "a2a:status_update_event"
+  state: "TASK_STATE_COMPLETED"
+  message: a2a.message({
+    messageId: uuid(),
+    parts: [
+      a2a.textPart("DEAL DESK DECISION: NOT ALLOWED (" + @orchestrator.dealReview.output.deal_id + ", " + @orchestrator.dealReview.output.discount_pct + "% discount) | " + @orchestrator.dealReview.output.summary + " | No contract drafted. Please revise the discount to 25% or less.")
+    ]
+  })
+
+echo needInfoResponse:
+  kind: "a2a:status_update_event"
+  state: "TASK_STATE_COMPLETED"
+  message: a2a.message({
+    messageId: uuid(),
+    parts: [
+      a2a.textPart(@orchestrator.dealReview.output.summary)
+    ]
+  })
